@@ -3,6 +3,7 @@ from datetime import date
 from typing import List, Optional
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy import create_engine, Column, String, Date
 from sqlalchemy.ext.declarative import declarative_base
@@ -53,7 +54,7 @@ class PedidoResponse(BaseModel):
 # Inicialização do FastAPI
 app = FastAPI(title="Sistema de Produção e SLA")
 
-# LIBERAR CORS (Permite que o painel HTML faça requisições à API)
+# Liberar CORS (Permite requisições de navegadores/frontends)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -71,9 +72,14 @@ def get_db():
     finally:
         db.close()
 
-@app.get("/")
+# ROTA PRINCIPAL: Serve o Painel HTML
+@app.get("/", response_class=HTMLResponse)
 def root():
-    return {"mensagem": "API de Produção e SLA ativa! Acesse /docs para a documentação."}
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>Arquivo index.html não encontrado no servidor.</h1>"
 
 @app.post("/pedidos")
 def criar_pedido(pedido: PedidoCreate, db: Session = Depends(get_db)):
