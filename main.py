@@ -54,7 +54,7 @@ class PedidoResponse(BaseModel):
 # Inicialização do FastAPI
 app = FastAPI(title="Sistema de Produção e SLA")
 
-# Liberar CORS (Permite requisições de navegadores/frontends)
+# LIBERAR CORS (Permite que o painel HTML faça requisições à API)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,7 +72,7 @@ def get_db():
     finally:
         db.close()
 
-# ROTA PRINCIPAL: Serve o Painel HTML
+# Rota principal servindo o painel visual (index.html)
 @app.get("/", response_class=HTMLResponse)
 def root():
     try:
