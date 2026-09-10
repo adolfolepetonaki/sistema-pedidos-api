@@ -1,109 +1,147 @@
 import os
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import RedirectResponse
-from pydantic import BaseModel
-from typing import List
-from enum import Enum
 from datetime import date
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from sqlalchemy import create_engine, Column, String, Date
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, Session
 
-from sqlalchemy import create_engine, Column, String, Date, Boolean, Text
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
+# Configuração do Banco de Dados PostgreSQL (Neon)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Le a URL do banco da variavel de ambiente (no Render) ou usa a do Neon
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://seu_usuario:sua_senha@ep-exemplo.us-east-2.aws.neon.tech/neondb?sslmode=require")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(DATABASE_URL)
+engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-class StatusPedido(str, Enum):
-    FECHADO = "FECHADO"
-    EM_PRODUCAO = "EM_PRODUCAO"
-    ENTREGUE = "ENTREGUE"
-    CANCELADO = "CANCELADO"
-
+# Modelo da Tabela no Banco
 class PedidoDB(Base):
-    __tablename__ = "pedidos_producao"
-    id_pedido = Column(String, primary_key=True, index=True)
-    cliente_nome = Column(String, nullable=False)
-    descricao_itens = Column(Text, nullable=False)
-    status = Column(String, default=StatusPedido.FECHADO.value)
-    data_criacao = Column(Date, default=date.today)
-    prazo_entrega = Column(Date, nullable=False)
-    data_entrega_real = Column(Date, nullable=True)
-    entregue_no_prazo = Column(Boolean, nullable=True)
+    __tablename__ = "pedidos"
 
-Base.metadata.create_all(bind=engine)
+    id_pedido = Column(String, primary_key=True, index=True)
+    cliente_nome = Column(String)
+    descricao_itens = Column(String)
+    prazo_entrega = Column(Date)
+    status = Column(String, default="FECHADO")
+    data_entrega_real = Column(Date, nullable=True)
+
+if engine:
+    Base.metadata.create_all(bind=engine)
+
+# Esquemas Pydantic
+class PedidoCreate(BaseModel):
+    id_pedido: str
+    cliente_nome: str
+    descricao_itens: str
+    prazo_entrega: date
+
+class PedidoResponse(BaseModel):
+    id_pedido: str
+    cliente_nome: str
+    descricao_itens: str
+    prazo_entrega: date
+    status: str
+    data_entrega_real: Optional[date] = None
+
+    class Config:
+        from_attributes = True
+
+# Inicialização do FastAPI
+app = FastAPI(title="Sistema de Produção e SLA")
+
+# LIBERAR CORS (Permite que o painel HTML faça requisições à API)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_db():
+    if not engine:
+        raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
 
-class PedidoCriar(BaseModel):
-    id_pedido: str
-    cliente_nome: str
-    descricao_itens: str
-    prazo_entrega: date
-
-app = FastAPI(title="Gestão de Pedidos, Produção e Entregas")
-
-@app.get("/", include_in_schema=False)
-def redirecionar_docs():
-    return RedirectResponse(url="/docs")
+@app.get("/")
+def root():
+    return {"mensagem": "API de Produção e SLA ativa! Acesse /docs para a documentação."}
 
 @app.post("/pedidos")
-def criar_pedido(dados: PedidoCriar, db: Session = Depends(get_db)):
-    existente = db.query(PedidoDB).filter(PedidoDB.id_pedido == dados.id_pedido).first()
-    if existente:
-        raise HTTPException(status_code=400, detail="ID de pedido já existente.")
+def criar_pedido(pedido: PedidoCreate, db: Session = Depends(get_db)):
+    db_pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == pedido.id_pedido).first()
+    if db_pedido:
+        raise HTTPException(status_code=400, detail="Pedido com este ID já existe.")
+    
     novo_pedido = PedidoDB(
-        id_pedido=dados.id_pedido,
-        cliente_nome=dados.cliente_nome,
-        descricao_itens=dados.descricao_itens,
-        prazo_entrega=dados.prazo_entrega,
-        status=StatusPedido.FECHADO.value
+        id_pedido=pedido.id_pedido,
+        cliente_nome=pedido.cliente_nome,
+        descricao_itens=pedido.descricao_itens,
+        prazo_entrega=pedido.prazo_entrega,
+        status="FECHADO"
     )
     db.add(novo_pedido)
     db.commit()
-    return {"mensagem": "Pedido registrado!", "pedido": novo_pedido}
+    return {"mensagem": "Pedido registrado!", "id_pedido": pedido.id_pedido}
 
 @app.put("/pedidos/{id_pedido}/producao")
-def enviar_para_producao(id_pedido: str, db: Session = Depends(get_db)):
+def mover_para_producao(id_pedido: str, db: Session = Depends(get_db)):
     pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == id_pedido).first()
     if not pedido:
         raise HTTPException(status_code=404, detail="Pedido não encontrado.")
-    pedido.status = StatusPedido.EM_PRODUCAO.value
+    
+    pedido.status = "EM_PRODUCAO"
     db.commit()
-    return {"mensagem": f"Pedido #{id_pedido} em produção!"}
-
-@app.put("/pedidos/{id_pedido}/entregar")
-def registrar_entrega(id_pedido: str, db: Session = Depends(get_db)):
-    pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == id_pedido).first()
-    if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
-    hoje = date.today()
-    pedido.status = StatusPedido.ENTREGUE.value
-    pedido.data_entrega_real = hoje
-    pedido.entregue_no_prazo = (hoje <= pedido.prazo_entrega)
-    db.commit()
-    return {"mensagem": "Pedido entregue!", "no_prazo": pedido.entregue_no_prazo}
+    return {"mensagem": f"Pedido {id_pedido} movido para EM_PRODUCAO."}
 
 @app.get("/relatorio/fila-producao")
-def ver_fila_producao(db: Session = Depends(get_db)):
+def fila_producao(db: Session = Depends(get_db)):
+    pedidos = db.query(PedidoDB).filter(PedidoDB.status.in_(["FECHADO", "EM_PRODUCAO"])).all()
     hoje = date.today()
-    pedidos = db.query(PedidoDB).filter(PedidoDB.status == StatusPedido.EM_PRODUCAO.value).all()
-    fila = []
+    
+    resultado = []
     for p in pedidos:
-        dias = (p.prazo_entrega - hoje).days
-        fila.append({
+        dias_restantes = (p.prazo_entrega - hoje).days
+        if dias_restantes < 0:
+            alerta = "ATRASADO"
+        elif dias_restantes <= 2:
+            alerta = "URGENTE"
+        else:
+            alerta = "OK"
+            
+        resultado.append({
             "id_pedido": p.id_pedido,
-            "cliente": p.cliente_nome,
-            "itens": p.descricao_itens,
-            "prazo": p.prazo_entrega,
-            "dias_restantes": dias,
-            "alerta": "ATRASADO" if dias < 0 else ("URGENTE" if dias <= 2 else "OK")
+            "cliente_nome": p.cliente_nome,
+            "descricao_itens": p.descricao_itens,
+            "status": p.status,
+            "prazo_entrega": str(p.prazo_entrega),
+            "dias_restantes": dias_restantes,
+            "alerta_sla": alerta
         })
-    return fila
+    return resultado
+
+@app.put("/pedidos/{id_pedido}/entregar")
+def entregar_pedido(id_pedido: str, db: Session = Depends(get_db)):
+    pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == id_pedido).first()
+    if not pedido:
+        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
+    
+    hoje = date.today()
+    pedido.status = "ENTREGUE"
+    pedido.data_entrega_real = hoje
+    db.commit()
+    
+    no_prazo = hoje <= pedido.prazo_entrega
+    return {
+        "mensagem": f"Pedido {id_pedido} entregue!",
+        "data_entrega": str(hoje),
+        "no_prazo": no_prazo
+    }
