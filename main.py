@@ -9,7 +9,6 @@ from sqlalchemy import create_engine, Column, String, Date
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session
 
-# Configuração do Banco de Dados PostgreSQL (Neon)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
@@ -19,7 +18,6 @@ engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Modelo da Tabela no Banco
 class PedidoDB(Base):
     __tablename__ = "pedidos"
 
@@ -33,7 +31,6 @@ class PedidoDB(Base):
 if engine:
     Base.metadata.create_all(bind=engine)
 
-# Esquemas Pydantic
 class PedidoCreate(BaseModel):
     id_pedido: str
     cliente_nome: str
@@ -51,10 +48,8 @@ class PedidoResponse(BaseModel):
     class Config:
         from_attributes = True
 
-# Inicialização do FastAPI
 app = FastAPI(title="Sistema de Produção e SLA")
 
-# LIBERAR CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -72,7 +67,6 @@ def get_db():
     finally:
         db.close()
 
-# Rota principal servindo o painel HTML
 @app.get("/", response_class=HTMLResponse)
 def root():
     try:
