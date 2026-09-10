@@ -1,147 +1,132 @@
-import os
-from datetime import date
-from typing import List, Optional
-from fastapi import FastAPI, HTTPException, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from sqlalchemy import create_engine, Column, String, Date
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Painel de Gestão de Pedidos e SLA</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 30px; background-color: #f4f6f9; color: #333; }
+        h1 { color: #2c3e50; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 25px; }
+        form { display: grid; gap: 12px; max-width: 400px; }
+        input, button { padding: 10px; border: 1px solid #ccc; border-radius: 5px; font-size: 14px; }
+        button { background-color: #27ae60; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background-color: #219150; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #2c3e50; color: white; }
+        .badge { padding: 4px 8px; border-radius: 4px; color: white; font-weight: bold; font-size: 12px; }
+        .badge-ok { background-color: #27ae60; }
+        .badge-urgente { background-color: #f39c12; }
+        .badge-atrasado { background-color: #e74c3c; }
+        .btn-action { padding: 6px 12px; font-size: 12px; margin-right: 5px; }
+        .btn-prod { background-color: #2980b9; }
+        .btn-entregar { background-color: #8e44ad; }
+    </style>
+</head>
+<body>
 
-# Configuração do Banco de Dados PostgreSQL (Neon)
-DATABASE_URL = os.getenv("DATABASE_URL")
+    <h1>Gestão de Pedidos, Produção e SLA</h1>
 
-if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+    <div class="card">
+        <h2>Cadastrar Novo Pedido</h2>
+        <form id="formPedido">
+            <input type="text" id="id_pedido" placeholder="ID do Pedido (ex: PED-101)" required>
+            <input type="text" id="cliente_nome" placeholder="Nome do Cliente" required>
+            <input type="text" id="descricao_itens" placeholder="Descrição dos Itens" required>
+            <input type="date" id="prazo_entrega" required>
+            <button type="submit">Salvar Pedido</button>
+        </form>
+    </div>
 
-engine = create_engine(DATABASE_URL) if DATABASE_URL else None
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+    <div class="card">
+        <h2>Fila de Produção</h2>
+        <button onclick="carregarFila()">Atualizar Fila</button>
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Cliente</th>
+                    <th>Descrição</th>
+                    <th>Status</th>
+                    <th>Prazo</th>
+                    <th>Dias Restantes</th>
+                    <th>SLA</th>
+                    <th>Ações</th>
+                </tr>
+            </thead>
+            <tbody id="tabelaFila"></tbody>
+        </table>
+    </div>
 
-# Modelo da Tabela no Banco
-class PedidoDB(Base):
-    __tablename__ = "pedidos"
+    <script>
+        const API_URL = "https://sistema-pedidos-api-w36i.onrender.com";
 
-    id_pedido = Column(String, primary_key=True, index=True)
-    cliente_nome = Column(String)
-    descricao_itens = Column(String)
-    prazo_entrega = Column(Date)
-    status = Column(String, default="FECHADO")
-    data_entrega_real = Column(Date, nullable=True)
+        document.getElementById('formPedido').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const payload = {
+                id_pedido: document.getElementById('id_pedido').value,
+                cliente_nome: document.getElementById('cliente_nome').value,
+                descricao_itens: document.getElementById('descricao_itens').value,
+                prazo_entrega: document.getElementById('prazo_entrega').value
+            };
 
-if engine:
-    Base.metadata.create_all(bind=engine)
+            const res = await fetch(`${API_URL}/pedidos`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
 
-# Esquemas Pydantic
-class PedidoCreate(BaseModel):
-    id_pedido: str
-    cliente_nome: str
-    descricao_itens: str
-    prazo_entrega: date
+            if (res.ok) {
+                alert('Pedido cadastrado com sucesso!');
+                document.getElementById('formPedido').reset();
+                carregarFila();
+            } else {
+                const err = await res.json();
+                alert('Erro: ' + (err.detail || 'Falha ao cadastrar'));
+            }
+        });
 
-class PedidoResponse(BaseModel):
-    id_pedido: str
-    cliente_nome: str
-    descricao_itens: str
-    prazo_entrega: date
-    status: str
-    data_entrega_real: Optional[date] = None
+        async function carregarFila() {
+            const res = await fetch(`${API_URL}/relatorio/fila-producao`);
+            const dados = await res.json();
+            const tbody = document.getElementById('tabelaFila');
+            tbody.innerHTML = '';
 
-    class Config:
-        from_attributes = True
+            dados.forEach(item => {
+                let badgeClass = 'badge-ok';
+                if (item.alerta_sla === 'URGENTE') badgeClass = 'badge-urgente';
+                if (item.alerta_sla === 'ATRASADO') badgeClass = 'badge-atrasado';
 
-# Inicialização do FastAPI
-app = FastAPI(title="Sistema de Produção e SLA")
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${item.id_pedido}</td>
+                    <td>${item.cliente_nome}</td>
+                    <td>${item.descricao_itens}</td>
+                    <td>${item.status}</td>
+                    <td>${item.prazo_entrega}</td>
+                    <td>${item.dias_restantes}</td>
+                    <td><span class="badge ${badgeClass}">${item.alerta_sla}</span></td>
+                    <td>
+                        ${item.status === 'FECHADO' ? `<button class="btn-action btn-prod" onclick="moverProducao('${item.id_pedido}')">Mover P/ Produção</button>` : ''}
+                        <button class="btn-action btn-entregar" onclick="entregarPedido('${item.id_pedido}')">Entregar</button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
 
-# LIBERAR CORS (Permite que o painel HTML faça requisições à API)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        async function moverProducao(id) {
+            await fetch(`${API_URL}/pedidos/${id}/producao`, { method: 'PUT' });
+            carregarFila();
+        }
 
-def get_db():
-    if not engine:
-        raise HTTPException(status_code=500, detail="DATABASE_URL não configurada.")
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+        async function entregarPedido(id) {
+            await fetch(`${API_URL}/pedidos/${id}/entregar`, { method: 'PUT' });
+            carregarFila();
+        }
 
-@app.get("/")
-def root():
-    return {"mensagem": "API de Produção e SLA ativa! Acesse /docs para a documentação."}
-
-@app.post("/pedidos")
-def criar_pedido(pedido: PedidoCreate, db: Session = Depends(get_db)):
-    db_pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == pedido.id_pedido).first()
-    if db_pedido:
-        raise HTTPException(status_code=400, detail="Pedido com este ID já existe.")
-    
-    novo_pedido = PedidoDB(
-        id_pedido=pedido.id_pedido,
-        cliente_nome=pedido.cliente_nome,
-        descricao_itens=pedido.descricao_itens,
-        prazo_entrega=pedido.prazo_entrega,
-        status="FECHADO"
-    )
-    db.add(novo_pedido)
-    db.commit()
-    return {"mensagem": "Pedido registrado!", "id_pedido": pedido.id_pedido}
-
-@app.put("/pedidos/{id_pedido}/producao")
-def mover_para_producao(id_pedido: str, db: Session = Depends(get_db)):
-    pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == id_pedido).first()
-    if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
-    
-    pedido.status = "EM_PRODUCAO"
-    db.commit()
-    return {"mensagem": f"Pedido {id_pedido} movido para EM_PRODUCAO."}
-
-@app.get("/relatorio/fila-producao")
-def fila_producao(db: Session = Depends(get_db)):
-    pedidos = db.query(PedidoDB).filter(PedidoDB.status.in_(["FECHADO", "EM_PRODUCAO"])).all()
-    hoje = date.today()
-    
-    resultado = []
-    for p in pedidos:
-        dias_restantes = (p.prazo_entrega - hoje).days
-        if dias_restantes < 0:
-            alerta = "ATRASADO"
-        elif dias_restantes <= 2:
-            alerta = "URGENTE"
-        else:
-            alerta = "OK"
-            
-        resultado.append({
-            "id_pedido": p.id_pedido,
-            "cliente_nome": p.cliente_nome,
-            "descricao_itens": p.descricao_itens,
-            "status": p.status,
-            "prazo_entrega": str(p.prazo_entrega),
-            "dias_restantes": dias_restantes,
-            "alerta_sla": alerta
-        })
-    return resultado
-
-@app.put("/pedidos/{id_pedido}/entregar")
-def entregar_pedido(id_pedido: str, db: Session = Depends(get_db)):
-    pedido = db.query(PedidoDB).filter(PedidoDB.id_pedido == id_pedido).first()
-    if not pedido:
-        raise HTTPException(status_code=404, detail="Pedido não encontrado.")
-    
-    hoje = date.today()
-    pedido.status = "ENTREGUE"
-    pedido.data_entrega_real = hoje
-    db.commit()
-    
-    no_prazo = hoje <= pedido.prazo_entrega
-    return {
-        "mensagem": f"Pedido {id_pedido} entregue!",
-        "data_entrega": str(hoje),
-        "no_prazo": no_prazo
-    }
+        carregarFila();
+    </script>
+</body>
+</html>
