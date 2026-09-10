@@ -72,7 +72,7 @@ def get_db():
     finally:
         db.close()
 
-# ROTA PRINCIPAL: Serve a página HTML
+# Rota principal servindo o painel HTML
 @app.get("/", response_class=HTMLResponse)
 def root():
     try:
